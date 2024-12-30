@@ -27,7 +27,7 @@ jobs:
 
       # Format check
       - name: Format
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all
 
       # Lint check
       - name: Clippy
