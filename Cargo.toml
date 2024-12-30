@@ -1,0 +1,18 @@
+[package]
+name = "aws_sso"
+authors = ["David Webster <dwebster182@gmail.com>"]
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+aws-config = "1.5.10"
+aws-sdk-sso = "1.5.10"
+aws-sdk-ssooidc = "1.5.10"
+webbrowser = "0.5.5"
+skim = "0.10.1"
+dirs-next = "2.0"
+
+[lib]
+name = "aws_sso"
+path = "src/lib.rs"
