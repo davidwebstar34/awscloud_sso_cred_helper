@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/aws_sso.svg)](https://crates.io/crates/aws_sso)
 [![Docs.rs](https://docs.rs/aws_sso/badge.svg)](https://docs.rs/aws_sso)
-[![Build Status](https://img.shields.io/github/workflow/status/davidwebstar34/aws_sso/build/master)](https://github.com/davidwebstar34/aws_sso/actions?query=workflow%3Abuild)
+[![Build Status](https://img.shields.io/github/workflow/status/davidwebstar34/aws_sso/build/main)](https://github.com/davidwebstar34/aws_sso/actions?query=workflow%3Abuild)
 
 A simple crate for working with AWS SSO credentials and saving them directly to your ~/.aws/credentials without needing to copy the credentials to your cli.
 
