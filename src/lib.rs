@@ -8,7 +8,9 @@ pub fn create_workflow() -> Result<AwsSsoWorkflow, Box<dyn Error>> {
 }
 
 pub trait Workflow<'a> {
-    type Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>;
+    type Fut: Future<
+        Output = Result<Vec<(String, String, String, String, String)>, Box<dyn std::error::Error>>,
+    >;
 
     fn run(&'a mut self) -> Self::Fut;
 }

@@ -1,8 +1,15 @@
 [package]
 name = "aws_sso"
-authors = ["David Webster <dwebster182@gmail.com>"]
 version = "1.0.0"
 edition = "2021"
+authors = ["David Webster <dwebster182@gmail.com>"]
+description = "A simple crate for working with AWS SSO operations."
+license = "Apache-2.0"
+repository = "https://github.com/davidwebstar34/aws_sso"
+homepage = "https://github.com/davidwebstar34/aws_sso"
+documentation = "https://docs.rs/aws_sso"
+keywords = ["aws", "sso", "rust"]
+categories = ["cloud-computing", "access-management"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

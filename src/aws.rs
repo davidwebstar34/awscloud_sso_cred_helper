@@ -142,7 +142,9 @@ impl AwsSsoWorkflow {
         sso_client: &SsoClient,
         access_token: &str,
         selected_items: Vec<String>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<Vec<(String, String, String, String, String)>, Box<dyn std::error::Error>> {
+        let mut credentials_list = Vec::new();
+
         for selected_output in selected_items {
             let parts: Vec<&str> = selected_output.split(" - ").collect();
             if parts.len() != 3 {
@@ -167,15 +169,28 @@ impl AwsSsoWorkflow {
                 .await?;
 
             if let Some(credentials) = credentials_resp.role_credentials() {
-                let access_key_id = credentials.access_key_id().unwrap_or("");
-                let secret_access_key = credentials.secret_access_key().unwrap_or("");
-                let session_token = credentials.session_token().unwrap_or("");
+                let access_key_id = credentials.access_key_id().unwrap_or("").to_string();
+                let secret_access_key = credentials.secret_access_key().unwrap_or("").to_string();
+                let session_token = credentials.session_token().unwrap_or("").to_string();
 
-                println!("Environment variables updated for the selected role.");
+                credentials_list.push((
+                    account_id.to_string(),
+                    role_name.to_string(),
+                    access_key_id.clone(),
+                    secret_access_key.clone(),
+                    session_token.clone(),
+                ));
+
+                println!(
+                    "Credentials fetched for Account ID: {}, Role: {}",
+                    account_id, role_name
+                );
+
+                // Optional: Write credentials to AWS config
                 AwsSsoWorkflow::write_default_aws_credentials(
-                    access_key_id,
-                    secret_access_key,
-                    session_token,
+                    &access_key_id,
+                    &secret_access_key,
+                    &session_token,
                 )?;
             } else {
                 eprintln!(
@@ -184,7 +199,8 @@ impl AwsSsoWorkflow {
                 );
             }
         }
-        Ok(())
+
+        Ok(credentials_list)
     }
 
     fn perform_fuzzy_search(
@@ -268,7 +284,9 @@ impl AwsSsoWorkflow {
         Ok(input.trim().to_string())
     }
 
-    pub async fn run_workflow(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn run_workflow(
+        &mut self,
+    ) -> Result<Vec<(String, String, String, String, String)>, Box<dyn Error>> {
         self.start_url = Self::prompt_input("Enter the AWS start URL")?;
 
         self.region = Self::prompt_input("Enter the AWS region")?;
@@ -331,30 +349,36 @@ impl AwsSsoWorkflow {
             Self::fetch_accounts_and_roles(&sso_client, access_token).await?;
         if account_role_strings.is_empty() {
             println!("No accounts or roles found.");
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         let selected_items = Self::perform_fuzzy_search(&account_role_strings)?;
         if selected_items.is_empty() {
             println!("No accounts selected.");
-            return Ok(());
+            return Ok(Vec::new());
         }
 
-        Self::process_selected_accounts_and_roles(&sso_client, access_token, selected_items)
-            .await?;
+        let credentials =
+            Self::process_selected_accounts_and_roles(&sso_client, access_token, selected_items)
+                .await?;
 
-        println!("Process completed successfully.");
-
-        Ok(())
+        Ok(credentials)
     }
 }
 
 impl<'a> crate::Workflow<'a> for AwsSsoWorkflow {
-    type Fut = std::pin::Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error>>> + 'a>>;
+    type Fut = std::pin::Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        Vec<(String, String, String, String, String)>,
+                        Box<dyn std::error::Error>,
+                    >,
+                > + 'a,
+        >,
+    >;
 
     fn run(&'a mut self) -> Self::Fut {
-        Box::pin(async move {
-            self.run_workflow().await
-        })
+        Box::pin(async move { self.run_workflow().await })
     }
 }
