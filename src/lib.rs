@@ -1,3 +1,34 @@
+//! # aws_sso
+//!
+//! A crate for managing AWS Single Sign-On (SSO) workflows.
+//!
+//! This crate provides utilities for retrieving AWS credentials for multiple accounts and roles via AWS SSO. It integrates with the AWS SSO OIDC workflow and fetches temporary credentials for accounts and roles assigned to a user.
+//!
+//! # Examples
+//!
+//! To use the library, create an instance of [`AwsSsoWorkflow`] and call `run_workflow` to retrieve credentials:
+//!
+//! ```no_run
+//! use aws_sso::AwsSsoWorkflow;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let mut workflow = AwsSsoWorkflow::default();
+//!     let credential = workflow.run_workflow().await?;
+//!
+//!     println!("Account ID: {}", credential.account_id);
+//!     println!("Role Name: {}", credential.role_name);
+//!     println!("Access Key ID: {}", credential.access_key_id);
+//!     println!("Secret Access Key: {}", credential.secret_access_key);
+//!     println!("Session Token: {}", credential.session_token);
+//!     println!("---------------------------------");
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! [`AwsSsoWorkflow`]: struct.AwsSsoWorkflow.html
+
 use aws_config::BehaviorVersion;
 use aws_sdk_sso::config::Region;
 use aws_sdk_sso::Client as SsoClient;
@@ -15,6 +46,14 @@ use webbrowser;
 pub struct AwsSsoWorkflow {
     pub start_url: String,
     pub region: String,
+}
+
+pub struct Credential {
+    pub account_id: String,
+    pub role_name: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: String,
 }
 
 impl AwsSsoWorkflow {
@@ -141,9 +180,7 @@ impl AwsSsoWorkflow {
         sso_client: &SsoClient,
         access_token: &str,
         selected_items: Vec<String>,
-    ) -> Result<Vec<(String, String, String, String, String)>, Box<dyn std::error::Error>> {
-        let mut credentials_list = Vec::new();
-
+    ) -> Result<Credential, Box<dyn std::error::Error>> {
         for selected_output in selected_items {
             let parts: Vec<&str> = selected_output.split(" - ").collect();
             if parts.len() != 3 {
@@ -172,13 +209,13 @@ impl AwsSsoWorkflow {
                 let secret_access_key = credentials.secret_access_key().unwrap_or("").to_string();
                 let session_token = credentials.session_token().unwrap_or("").to_string();
 
-                credentials_list.push((
-                    account_id.to_string(),
-                    role_name.to_string(),
-                    access_key_id.clone(),
-                    secret_access_key.clone(),
-                    session_token.clone(),
-                ));
+                let creds = Credential {
+                    account_id: account_id.to_string(),
+                    role_name: role_name.to_string(),
+                    access_key_id: access_key_id.clone(),
+                    secret_access_key: secret_access_key.clone(),
+                    session_token: session_token.clone(),
+                };
 
                 println!(
                     "Credentials fetched for Account ID: {}, Role: {}",
@@ -191,6 +228,8 @@ impl AwsSsoWorkflow {
                     &secret_access_key,
                     &session_token,
                 )?;
+
+                return Ok(creds); // Return the first successfully fetched credentials
             } else {
                 eprintln!(
                     "Failed to fetch credentials for Account ID: {}, Role: {}",
@@ -199,7 +238,7 @@ impl AwsSsoWorkflow {
             }
         }
 
-        Ok(credentials_list)
+        Err("No valid credentials found".into()) // Return an error if no credentials were fetched
     }
 
     fn perform_fuzzy_search(
@@ -283,9 +322,7 @@ impl AwsSsoWorkflow {
         Ok(input.trim().to_string())
     }
 
-    pub async fn run_workflow(
-        &mut self,
-    ) -> Result<Vec<(String, String, String, String, String)>, Box<dyn Error>> {
+    pub async fn run_workflow(&mut self) -> Result<Credential, Box<dyn Error>> {
         self.start_url = Self::prompt_input("Enter the AWS start URL")?;
 
         self.region = Self::prompt_input("Enter the AWS region")?;
@@ -348,13 +385,13 @@ impl AwsSsoWorkflow {
             Self::fetch_accounts_and_roles(&sso_client, access_token).await?;
         if account_role_strings.is_empty() {
             println!("No accounts or roles found.");
-            return Ok(Vec::new());
+            return Err("No accounts or roles found".into());
         }
 
         let selected_items = Self::perform_fuzzy_search(&account_role_strings)?;
         if selected_items.is_empty() {
             println!("No accounts selected.");
-            return Ok(Vec::new());
+            return Err("No accounts selected".into());
         }
 
         let credentials =
