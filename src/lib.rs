@@ -4,7 +4,14 @@
 //!
 //! This crate provides utilities for retrieving AWS credentials for multiple accounts and roles via AWS SSO. It integrates with the AWS SSO OIDC workflow and fetches temporary credentials for accounts and roles assigned to a user.
 //!
-//! # Examples
+//! ## Requirements
+//!
+//! - AWS SSO must be enabled for your AWS organization.
+//! - A valid AWS SSO start URL and region are required.
+//! - The `~/.aws/credentials` file will be updated with the fetched credentials.
+//! - Access to the device authorization page via a web browser.
+//!
+//! ## Examples
 //!
 //! To use the library, create an instance of [`AwsSsoWorkflow`] and call `run_workflow` to retrieve credentials:
 //!
@@ -13,9 +20,13 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create a new AWS SSO workflow instance.
 //!     let mut workflow = AwsSsoWorkflow::default();
+//!
+//!     // Run the workflow to fetch credentials.
 //!     let credential = workflow.run_workflow().await?;
 //!
+//!     // Print the retrieved credentials.
 //!     println!("Account ID: {}", credential.account_id);
 //!     println!("Role Name: {}", credential.role_name);
 //!     println!("Access Key ID: {}", credential.access_key_id);
@@ -26,6 +37,19 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## `run_workflow` Details
+//!
+//! The `run_workflow` function handles the complete AWS SSO process, including:
+//! - Registering an AWS SSO client.
+//! - Starting the device authorization process.
+//! - Polling for an authorization token.
+//! - Fetching accounts and roles assigned to the authenticated user.
+//! - Writing default AWS credentials to `~/.aws/credentials`.
+//!
+//! ### Side Effects
+//! - Updates the local AWS credentials file (`~/.aws/credentials`) with fetched credentials.
+//! - Opens the browser for device authorization.
 //!
 //! [`AwsSsoWorkflow`]: struct.AwsSsoWorkflow.html
 
@@ -242,24 +266,24 @@ impl AwsSsoWorkflow {
     fn perform_fuzzy_search(
         account_role_strings: &[String],
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let options = SkimOptionsBuilder::default()
-            .height(Some("20"))
-            .multi(true)
-            .prompt(Some("Select accounts and roles: "))
-            .build()
-            .unwrap();
-
-        let item_reader = SkimItemReader::default();
-        let items = item_reader.of_bufread(Cursor::new(account_role_strings.join("\n")));
-
-        Skim::run_with(&options, Some(items))
-            .map(|out| {
-                out.selected_items
-                    .iter()
-                    .map(|item| item.output().to_string())
-                    .collect()
-            })
-            .ok_or_else(|| "No selection made.".into())
+        Skim::run_with(
+            &SkimOptionsBuilder::default()
+                .height(Some("20"))
+                .multi(true)
+                .prompt(Some("Select accounts and roles: "))
+                .build()
+                .unwrap(),
+            Some(
+                SkimItemReader::default().of_bufread(Cursor::new(account_role_strings.join("\n"))),
+            ),
+        )
+        .map(|out| {
+            out.selected_items
+                .iter()
+                .map(|item| item.output().to_string())
+                .collect()
+        })
+        .ok_or_else(|| "No selection made.".into())
     }
 
     fn extract_access_token(
