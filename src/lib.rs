@@ -34,13 +34,11 @@ use aws_sdk_sso::config::Region;
 use aws_sdk_sso::Client as SsoClient;
 use aws_sdk_ssooidc::operation::create_token::CreateTokenOutput;
 use aws_sdk_ssooidc::Client as SsoOidcClient;
-use dirs_next;
 use skim::prelude::*;
 use std::error::Error;
 use std::fs;
 use std::io::{Cursor, Write};
 use tokio::time::{sleep, Duration};
-use webbrowser;
 
 #[derive(Default, Clone)]
 pub struct AwsSsoWorkflow {
