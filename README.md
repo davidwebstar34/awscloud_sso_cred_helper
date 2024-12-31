@@ -2,9 +2,9 @@
 
 [![Crates.io](https://img.shields.io/crates/v/aws_sso.svg)](https://crates.io/crates/aws_sso)
 [![Docs.rs](https://docs.rs/aws_sso/badge.svg)](https://docs.rs/aws_sso)
-[![Build Status](https://github.com/your_username/aws_sso/actions/workflows/ci.yml/badge.svg)](https://github.com/your_username/aws_sso/actions)
+[![Build Status](https://github.com/davidwebstar34/aws_sso/actions/workflows/ci.yml/badge.svg)](https://github.com/your_username/aws_sso/actions)
 
-A simple crate for working with AWS SSO operations.
+A simple crate for working with AWS SSO credentials and saving them directly to your ~/.aws/credentials without needing to copy the credentials to your cli.
 
 ## Getting started
 
@@ -26,11 +26,11 @@ You can register a new AWS SSO client like this:
 
 ```
 
-use aws_sso::aws::AwsSsoWorkflow;
+use aws_sso::AwsSsoWorkflow;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let mut workflow = AwsSsoWorkflow::default();
-let runtime = tokio::runtime::Runtime::new()?;
+    let mut workflow = AwsSsoWorkflow::default();
+    let runtime = tokio::runtime::Runtime::new()?;
 
     let credentials = runtime.block_on(workflow.run_workflow())?;
 
@@ -49,8 +49,8 @@ let runtime = tokio::runtime::Runtime::new()?;
     }
 
     Ok(())
-
 }
+
 
 ```
 
