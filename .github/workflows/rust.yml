@@ -14,33 +14,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout repository
       - uses: actions/checkout@v4
 
-      # Install Rust dependencies
       - name: Install Rust dependencies
         run: rustup component add rustfmt clippy
 
-      # Build the project
       - name: Build
         run: cargo build --verbose
 
-      # Format check
+      - name: Test
+        run: cargo test
+
       - name: Format
         run: cargo fmt --all
 
-      # Lint check
       - name: Clippy
         run: cargo clippy -- -D warnings
 
-      # Static analysis
       - name: Check
         run: cargo check
 
-      # Install cargo-audit
       - name: Install cargo-audit
         run: cargo install cargo-audit
 
-      # Security audit
       - name: Audit
         run: cargo audit
