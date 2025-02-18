@@ -2,15 +2,13 @@ use aws_sso::AwsSsoWorkflow;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut workflow = AwsSsoWorkflow::default();
-    let _ = workflow.run_workflow().await?;
+    let mut workflow = AwsSsoWorkflow {
+        start_url: "https://webstar34.awsapps.com/start".into(),
+        region: "eu-west-1".into(),
+        ..Default::default()
+    };
 
-    // println!("Account ID: {}", credential.account_id);
-    // println!("Role Name: {}", credential.role_name);
-    // println!("Access Key ID: {}", credential.access_key_id);
-    // println!("Secret Access Key: {}", credential.secret_access_key);
-    // println!("Session Token: {}", credential.session_token);
-    // println!("---------------------------------");
+    let _ = workflow.run_workflow().await?;
 
     Ok(())
 }

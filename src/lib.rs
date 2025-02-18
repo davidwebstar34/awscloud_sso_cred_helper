@@ -13,45 +13,56 @@
 //!
 //! ## Examples
 //!
-//! To use the library, create an instance of [`AwsSsoWorkflow`] and call `run_workflow` to retrieve credentials:
+//! ### Interactive Usage
 //!
 //! ```no_run
 //! use aws_sso::AwsSsoWorkflow;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Create a new AWS SSO workflow instance.
+//!     // With no parameters provided, the workflow will prompt interactively.
 //!     let mut workflow = AwsSsoWorkflow::default();
-//!
-//!     // Run the workflow to fetch credentials.
 //!     let credential = workflow.run_workflow().await?;
 //!
-//!     // Print the retrieved credentials.
 //!     println!("Account ID: {}", credential.account_id);
 //!     println!("Role Name: {}", credential.role_name);
 //!     println!("Access Key ID: {}", credential.access_key_id);
 //!     println!("Secret Access Key: {}", credential.secret_access_key);
 //!     println!("Session Token: {}", credential.session_token);
-//!     println!("---------------------------------");
-//!
 //!     Ok(())
 //! }
 //! ```
 //!
-//! ## `run_workflow` Details
+//! ### Non-interactive Usage (Providing Options)
 //!
-//! The `run_workflow` function handles the complete AWS SSO process, including:
-//! - Registering an AWS SSO client.
-//! - Starting the device authorization process.
-//! - Polling for an authorization token.
-//! - Fetching accounts and roles assigned to the authenticated user.
-//! - Writing default AWS credentials to `~/.aws/credentials`.
+//! You can also supply the start URL and region directly:
 //!
-//! ### Side Effects
-//! - Updates the local AWS credentials file (`~/.aws/credentials`) with fetched credentials.
-//! - Opens the browser for device authorization.
+//! ```no_run
+//! use aws_sso::AwsSsoWorkflow;
 //!
-//! [`AwsSsoWorkflow`]: struct.AwsSsoWorkflow.html
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Construct the workflow with the start URL and region pre-supplied.
+//!     let mut workflow = AwsSsoWorkflow {
+//!         start_url: "https://your.awsapps.com/start".into(),
+//!         region: "eu-west-1".into(),
+//!         ..Default::default()
+//!     };
+//!
+//!     let credential = workflow.run_workflow().await?;
+//!
+//!     println!("Account ID: {}", credential.account_id);
+//!     println!("Role Name: {}", credential.role_name);
+//!     println!("Access Key ID: {}", credential.access_key_id);
+//!     println!("Secret Access Key: {}", credential.secret_access_key);
+//!     println!("Session Token: {}", credential.session_token);
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## License
+//!
+//! Apache License, Version 2.0 or http://www.apache.org/licenses/LICENSE-2.0
 
 use aws_config::BehaviorVersion;
 use aws_sdk_sso::config::Region;
@@ -68,7 +79,9 @@ use tokio::time::{sleep, Duration};
 
 #[derive(Default, Clone)]
 pub struct AwsSsoWorkflow {
+    /// Optionally pre-supply the AWS SSO start URL.
     pub start_url: String,
+    /// Optionally pre-supply the AWS region.
     pub region: String,
 }
 
@@ -81,26 +94,22 @@ pub struct Credential {
 }
 
 impl AwsSsoWorkflow {
+    /// Writes the default AWS credentials to ~/.aws/credentials.
     fn write_default_aws_credentials(
         access_key_id: &str,
         secret_access_key: &str,
         session_token: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Determine the path to ~/.aws/credentials
         let credentials_path: PathBuf = dirs_next::home_dir()
             .ok_or("Could not locate home directory")?
             .join(".aws")
             .join("credentials");
 
-        // Ensure the directory exists.
         if let Some(parent) = credentials_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        // Create a new Ini instance.
         let mut config = Ini::new();
-
-        // If the file exists, try to load it.
         if credentials_path.exists() {
             let path_str = credentials_path
                 .to_str()
@@ -108,21 +117,16 @@ impl AwsSsoWorkflow {
             match config.load(path_str) {
                 Ok(_) => (),
                 Err(e) => {
-                    eprintln!(
-                        "Warning: Unable to parse existing credentials file ({}). Overwriting with a new file.",
-                        e
-                    );
-                    config = Ini::new(); // start fresh
+                    eprintln!("Warning: Unable to parse existing credentials file ({}). Overwriting with a new file.", e);
+                    config = Ini::new();
                 }
             }
         }
 
-        // Remove any existing "default" or "defaultx" sections.
         config.remove_section("default");
         config.remove_section("defaultx");
 
-        // Set new default credentials in a temporary section "defaultx".
-        // (We use a temporary name because configparser writes the "default" section without a header.)
+        // Use a temporary section name ("defaultx") so that we can later replace it.
         config.set(
             "defaultx",
             "aws_access_key_id",
@@ -139,17 +143,13 @@ impl AwsSsoWorkflow {
             Some(session_token.to_string()),
         );
 
-        // Write the updated configuration to the file.
         let path_str = credentials_path
             .to_str()
             .ok_or("Invalid credentials file path")?;
         config.write(path_str)?;
 
-        // Read back the file contents.
         let mut contents = fs::read_to_string(&credentials_path)?;
-        // Replace the temporary section header "[defaultx]" with "[default]".
         contents = contents.replace("[defaultx]", "[default]");
-        // Write the modified contents back to the file.
         fs::write(&credentials_path, contents)?;
 
         println!("Updated default credentials in {:?}", credentials_path);
@@ -222,7 +222,6 @@ impl AwsSsoWorkflow {
                 .await
             {
                 Ok(tr) => {
-                    println!("Token received successfully.");
                     return Ok(tr);
                 }
                 Err(e) => {
@@ -240,35 +239,36 @@ impl AwsSsoWorkflow {
         }
     }
 
+    /// Displays an interactive fuzzy-search selection for AWS regions.
     fn select_region() -> Result<String, Box<dyn Error>> {
         let regions = vec![
-            "us-east-1",      // US East (N. Virginia)
-            "us-east-2",      // US East (Ohio)
-            "us-west-1",      // US West (N. California)
-            "us-west-2",      // US West (Oregon)
-            "af-south-1",     // Africa (Cape Town)
-            "ap-east-1",      // Asia Pacific (Hong Kong)
-            "ap-south-1",     // Asia Pacific (Mumbai)
-            "ap-southeast-1", // Asia Pacific (Singapore)
-            "ap-southeast-2", // Asia Pacific (Sydney)
-            "ap-northeast-1", // Asia Pacific (Tokyo)
-            "ap-northeast-2", // Asia Pacific (Seoul)
-            "ap-northeast-3", // Asia Pacific (Osaka)
-            "ca-central-1",   // Canada (Central)
-            "eu-central-1",   // Europe (Frankfurt)
-            "eu-west-1",      // Europe (Ireland)
-            "eu-west-2",      // Europe (London)
-            "eu-west-3",      // Europe (Paris)
-            "eu-north-1",     // Europe (Stockholm)
-            "eu-south-1",     // Europe (Milan)
-            "me-south-1",     // Middle East (Bahrain)
-            "sa-east-1",      // South America (São Paulo)
+            "us-east-1",
+            "us-east-2",
+            "us-west-1",
+            "us-west-2",
+            "af-south-1",
+            "ap-east-1",
+            "ap-south-1",
+            "ap-southeast-1",
+            "ap-southeast-2",
+            "ap-northeast-1",
+            "ap-northeast-2",
+            "ap-northeast-3",
+            "ca-central-1",
+            "eu-central-1",
+            "eu-west-1",
+            "eu-west-2",
+            "eu-west-3",
+            "eu-north-1",
+            "eu-south-1",
+            "me-south-1",
+            "sa-east-1",
         ];
 
         let options = SkimOptionsBuilder::default()
-            .height(Some("10")) // Height of the skim window.
-            .prompt(Some("Select region: ")) // Prompt text.
-            .multi(false) // Single selection.
+            .height(Some("10"))
+            .prompt(Some("Select region: "))
+            .multi(false)
             .build()
             .unwrap();
 
@@ -277,9 +277,10 @@ impl AwsSsoWorkflow {
 
         let selected_items = Skim::run_with(&options, Some(items))
             .map(|out| out.selected_items)
-            .unwrap_or_else(|| Vec::new());
+            .unwrap_or_else(Vec::new);
 
         if let Some(selected) = selected_items.first() {
+            println!(); // Ensure output appears on a new line
             Ok(selected.output().to_string())
         } else {
             Err("No region selected".into())
@@ -300,11 +301,6 @@ impl AwsSsoWorkflow {
 
             let account_id = parts[0];
             let role_name = parts[2];
-
-            println!(
-                "Fetching credentials for Account ID: {}, Role: {}",
-                account_id, role_name
-            );
 
             let credentials_resp = sso_client
                 .get_role_credentials()
@@ -327,19 +323,20 @@ impl AwsSsoWorkflow {
                     session_token: session_token.clone(),
                 };
 
+                println!();
                 println!(
                     "Credentials fetched for Account ID: {}, Role: {}",
                     account_id, role_name
                 );
 
-                // Optional: Write credentials to AWS config
+                // Write credentials to AWS config
                 AwsSsoWorkflow::write_default_aws_credentials(
                     &access_key_id,
                     &secret_access_key,
                     &session_token,
                 )?;
 
-                return Ok(creds); // Return the first successfully fetched credentials
+                return Ok(creds);
             } else {
                 eprintln!(
                     "Failed to fetch credentials for Account ID: {}, Role: {}",
@@ -347,8 +344,7 @@ impl AwsSsoWorkflow {
                 );
             }
         }
-
-        Err("No valid credentials found".into()) // Return an error if no credentials were fetched
+        Err("No valid credentials found".into())
     }
 
     fn perform_fuzzy_search(
@@ -386,7 +382,6 @@ impl AwsSsoWorkflow {
         sso_client: &SsoClient,
         access_token: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        println!("Fetching accounts and roles...");
         let accounts_resp = sso_client
             .list_accounts()
             .access_token(access_token)
@@ -399,18 +394,15 @@ impl AwsSsoWorkflow {
         }
 
         let mut account_role_strings = Vec::new();
-
         for account in accounts {
             if let Some(account_id) = account.account_id() {
                 let account_name = account.account_name().unwrap_or("Unknown");
-
                 let roles_resp = sso_client
                     .list_account_roles()
                     .account_id(account_id)
                     .access_token(access_token)
                     .send()
                     .await?;
-
                 for role in roles_resp.role_list() {
                     if let Some(role_name) = role.role_name() {
                         account_role_strings
@@ -419,23 +411,20 @@ impl AwsSsoWorkflow {
                 }
             }
         }
-
         Ok(account_role_strings)
     }
 
-    fn prompt_input(prompt: &str) -> Result<String, Box<dyn Error>> {
-        print!("{}: ", prompt);
-        std::io::stdout().flush()?;
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        Ok(input.trim().to_string())
-    }
-
+    /// The main workflow.
+    ///
+    /// If `start_url` or `region` are empty, the user is prompted (or a fuzzy selector is shown).
     pub async fn run_workflow(&mut self) -> Result<Credential, Box<dyn Error>> {
-        self.start_url = Self::prompt_input("Enter the AWS start URL")?;
-
-        self.region = Self::select_region()?;
+        // Use provided values if available; otherwise, prompt.
+        if self.start_url.trim().is_empty() {
+            self.start_url = Self::prompt_input("Enter the AWS start URL")?;
+        }
+        if self.region.trim().is_empty() {
+            self.region = Self::select_region()?;
+        }
 
         println!(
             "Running AWS workflow with URL: {} and region: {}",
@@ -446,12 +435,9 @@ impl AwsSsoWorkflow {
             .region(Region::new(self.region.clone()))
             .load()
             .await;
-
         let sso_oidc_client = SsoOidcClient::new(&config);
-
         let (client_id, client_secret) =
             Self::register_client(&sso_oidc_client, "my-rust-sso-client", "public").await?;
-
         let (device_code, user_code, verification_uri, verification_uri_complete, interval) =
             Self::start_device_authorization(
                 &sso_oidc_client,
@@ -463,7 +449,7 @@ impl AwsSsoWorkflow {
 
         println!("Opening the verification page in your browser...");
         if webbrowser::open(&verification_uri_complete).is_ok() {
-            println!("Browser successfully opened. Please authenticate to continue.");
+            println!("Please authenticate to continue.");
         } else {
             println!(
                 "Could not open the browser. Please go to: {}",
@@ -480,29 +466,31 @@ impl AwsSsoWorkflow {
             interval as u64,
         )
         .await?;
-
         let sso_client = SsoClient::new(&config);
-
         let access_token = Self::extract_access_token(&token_response)?;
-        println!("Access token retrieved successfully.");
 
         let account_role_strings =
             Self::fetch_accounts_and_roles(&sso_client, access_token).await?;
         if account_role_strings.is_empty() {
-            println!("No accounts or roles found.");
             return Err("No accounts or roles found".into());
         }
 
         let selected_items = Self::perform_fuzzy_search(&account_role_strings)?;
         if selected_items.is_empty() {
-            println!("No accounts selected.");
             return Err("No accounts selected".into());
         }
 
         let credentials =
             Self::process_selected_accounts_and_roles(&sso_client, access_token, selected_items)
                 .await?;
-
         Ok(credentials)
+    }
+
+    fn prompt_input(prompt: &str) -> Result<String, Box<dyn Error>> {
+        print!("{}: ", prompt);
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        Ok(input.trim().to_string())
     }
 }
