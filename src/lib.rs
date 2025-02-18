@@ -58,10 +58,12 @@ use aws_sdk_sso::config::Region;
 use aws_sdk_sso::Client as SsoClient;
 use aws_sdk_ssooidc::operation::create_token::CreateTokenOutput;
 use aws_sdk_ssooidc::Client as SsoOidcClient;
+use configparser::ini::Ini;
 use skim::prelude::*;
 use std::error::Error;
 use std::fs;
 use std::io::{Cursor, Write};
+use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
 #[derive(Default, Clone)]
@@ -84,29 +86,74 @@ impl AwsSsoWorkflow {
         secret_access_key: &str,
         session_token: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        dirs_next::home_dir()
-                .map(|home| home.join(".aws/credentials"))
-                .ok_or_else(|| "Could not locate home directory".into())
-                .and_then(|credentials_path| {
-                    credentials_path
-                        .parent()
-                        .map(fs::create_dir_all)
-                        .transpose()
-                        .map_err(|e| e.into())
-                        .and_then(|_| {
-                            std::fs::write(
-                                &credentials_path,
-                                format!(
-                                    "[default]\naws_access_key_id = {}\naws_secret_access_key = {}\naws_session_token = {}\n",
-                                    access_key_id, secret_access_key, session_token
-                                ),
-                            )
-                            .map(|_| {
-                                println!("Default credentials written to: {:?}", credentials_path);
-                            })
-                            .map_err(|e| e.into())
-                        })
-                })
+        // Determine the path to ~/.aws/credentials
+        let credentials_path: PathBuf = dirs_next::home_dir()
+            .ok_or("Could not locate home directory")?
+            .join(".aws")
+            .join("credentials");
+
+        // Ensure the directory exists.
+        if let Some(parent) = credentials_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Create a new Ini instance.
+        let mut config = Ini::new();
+
+        // If the file exists, try to load it.
+        if credentials_path.exists() {
+            let path_str = credentials_path
+                .to_str()
+                .ok_or("Invalid credentials file path")?;
+            match config.load(path_str) {
+                Ok(_) => (),
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Unable to parse existing credentials file ({}). Overwriting with a new file.",
+                        e
+                    );
+                    config = Ini::new(); // start fresh
+                }
+            }
+        }
+
+        // Remove any existing "default" or "defaultx" sections.
+        config.remove_section("default");
+        config.remove_section("defaultx");
+
+        // Set new default credentials in a temporary section "defaultx".
+        // (We use a temporary name because configparser writes the "default" section without a header.)
+        config.set(
+            "defaultx",
+            "aws_access_key_id",
+            Some(access_key_id.to_string()),
+        );
+        config.set(
+            "defaultx",
+            "aws_secret_access_key",
+            Some(secret_access_key.to_string()),
+        );
+        config.set(
+            "defaultx",
+            "aws_session_token",
+            Some(session_token.to_string()),
+        );
+
+        // Write the updated configuration to the file.
+        let path_str = credentials_path
+            .to_str()
+            .ok_or("Invalid credentials file path")?;
+        config.write(path_str)?;
+
+        // Read back the file contents.
+        let mut contents = fs::read_to_string(&credentials_path)?;
+        // Replace the temporary section header "[defaultx]" with "[default]".
+        contents = contents.replace("[defaultx]", "[default]");
+        // Write the modified contents back to the file.
+        fs::write(&credentials_path, contents)?;
+
+        println!("Updated default credentials in {:?}", credentials_path);
+        Ok(())
     }
 
     async fn register_client(
@@ -180,14 +227,9 @@ impl AwsSsoWorkflow {
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    if msg.contains("authorization_pending") {
-                        println!("Authorization pending, retrying in {} seconds...", interval);
+                    if msg.contains("authorization_pending") || msg.contains("service error") {
                         sleep(Duration::from_secs(interval)).await;
                     } else if msg.contains("slow_down") {
-                        println!(
-                            "Too many requests. Slowing down, retrying in {} seconds...",
-                            interval + 5
-                        );
                         sleep(Duration::from_secs(interval + 5)).await;
                     } else {
                         eprintln!("Error: CreateToken failed with message: {}", msg);
@@ -195,6 +237,52 @@ impl AwsSsoWorkflow {
                     }
                 }
             }
+        }
+    }
+
+    fn select_region() -> Result<String, Box<dyn Error>> {
+        let regions = vec![
+            "us-east-1",      // US East (N. Virginia)
+            "us-east-2",      // US East (Ohio)
+            "us-west-1",      // US West (N. California)
+            "us-west-2",      // US West (Oregon)
+            "af-south-1",     // Africa (Cape Town)
+            "ap-east-1",      // Asia Pacific (Hong Kong)
+            "ap-south-1",     // Asia Pacific (Mumbai)
+            "ap-southeast-1", // Asia Pacific (Singapore)
+            "ap-southeast-2", // Asia Pacific (Sydney)
+            "ap-northeast-1", // Asia Pacific (Tokyo)
+            "ap-northeast-2", // Asia Pacific (Seoul)
+            "ap-northeast-3", // Asia Pacific (Osaka)
+            "ca-central-1",   // Canada (Central)
+            "eu-central-1",   // Europe (Frankfurt)
+            "eu-west-1",      // Europe (Ireland)
+            "eu-west-2",      // Europe (London)
+            "eu-west-3",      // Europe (Paris)
+            "eu-north-1",     // Europe (Stockholm)
+            "eu-south-1",     // Europe (Milan)
+            "me-south-1",     // Middle East (Bahrain)
+            "sa-east-1",      // South America (São Paulo)
+        ];
+
+        let options = SkimOptionsBuilder::default()
+            .height(Some("10")) // Height of the skim window.
+            .prompt(Some("Select region: ")) // Prompt text.
+            .multi(false) // Single selection.
+            .build()
+            .unwrap();
+
+        let item_reader = SkimItemReader::default();
+        let items = item_reader.of_bufread(Cursor::new(regions.join("\n")));
+
+        let selected_items = Skim::run_with(&options, Some(items))
+            .map(|out| out.selected_items)
+            .unwrap_or_else(|| Vec::new());
+
+        if let Some(selected) = selected_items.first() {
+            Ok(selected.output().to_string())
+        } else {
+            Err("No region selected".into())
         }
     }
 
@@ -347,7 +435,7 @@ impl AwsSsoWorkflow {
     pub async fn run_workflow(&mut self) -> Result<Credential, Box<dyn Error>> {
         self.start_url = Self::prompt_input("Enter the AWS start URL")?;
 
-        self.region = Self::prompt_input("Enter the AWS region")?;
+        self.region = Self::select_region()?;
 
         println!(
             "Running AWS workflow with URL: {} and region: {}",
@@ -383,11 +471,6 @@ impl AwsSsoWorkflow {
             );
             println!("Enter the user code: {}", user_code);
         }
-
-        println!("Please complete the authentication in your browser.");
-        println!("Press Enter after you have completed the process...");
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
 
         let token_response = Self::poll_for_token(
             &sso_oidc_client,
