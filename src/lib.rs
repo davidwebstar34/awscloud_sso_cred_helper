@@ -277,8 +277,7 @@ impl AwsSsoWorkflow {
 
         let selected_items = Skim::run_with(&options, Some(items))
             .map(|out| out.selected_items)
-            .unwrap_or_else(Vec::new);
-
+            .unwrap_or_default();
         if let Some(selected) = selected_items.first() {
             println!(); // Ensure output appears on a new line
             Ok(selected.output().to_string())
