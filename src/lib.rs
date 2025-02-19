@@ -1,4 +1,4 @@
-//! # aws_sso
+//! # awscloud_sso_cred_helper
 //!
 //! A crate for managing AWS Single Sign-On (SSO) workflows.
 //!
@@ -16,7 +16,7 @@
 //! ### Interactive Usage
 //!
 //! ```no_run
-//! use aws_sso::AwsSsoWorkflow;
+//! use awscloud_sso_cred_helper::AwsSsoWorkflow;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,7 +38,7 @@
 //! You can also supply the start URL and region directly:
 //!
 //! ```no_run
-//! use aws_sso::AwsSsoWorkflow;
+//! use awscloud_sso_cred_helper::AwsSsoWorkflow;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,9 +79,7 @@ use tokio::time::{sleep, Duration};
 
 #[derive(Default, Clone)]
 pub struct AwsSsoWorkflow {
-    /// Optionally pre-supply the AWS SSO start URL.
     pub start_url: String,
-    /// Optionally pre-supply the AWS region.
     pub region: String,
 }
 
@@ -94,7 +92,6 @@ pub struct Credential {
 }
 
 impl AwsSsoWorkflow {
-    /// Writes the default AWS credentials to ~/.aws/credentials.
     fn write_default_aws_credentials(
         access_key_id: &str,
         secret_access_key: &str,
@@ -239,7 +236,6 @@ impl AwsSsoWorkflow {
         }
     }
 
-    /// Displays an interactive fuzzy-search selection for AWS regions.
     fn select_region() -> Result<String, Box<dyn Error>> {
         let regions = vec![
             "us-east-1",
@@ -328,7 +324,6 @@ impl AwsSsoWorkflow {
                     account_id, role_name
                 );
 
-                // Write credentials to AWS config
                 AwsSsoWorkflow::write_default_aws_credentials(
                     &access_key_id,
                     &secret_access_key,

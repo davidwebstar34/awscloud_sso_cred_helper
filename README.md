@@ -1,8 +1,8 @@
-# aws_sso
+# awscloud_sso_cred_helper
 
-[![Crates.io](https://img.shields.io/crates/v/aws_sso.svg)](https://crates.io/crates/aws_sso)
-[![Docs.rs](https://docs.rs/aws_sso/badge.svg)](https://docs.rs/aws_sso)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/davidwebstar34/aws_sso/rust.yml?branch=main)](https://github.com/davidwebstar34/aws_sso/actions?query=branch%3Amain)
+[![Crates.io](https://img.shields.io/crates/v/awscloud_sso_cred_helper.svg)](https://crates.io/crates/awscloud_sso_cred_helper)
+[![Docs.rs](https://docs.rs/awscloud_sso_cred_helper/badge.svg)](https://docs.rs/awscloud_sso_cred_helper)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/davidwebstar34/awscloud_sso_cred_helper/rust.yml?branch=main)](https://github.com/davidwebstar34/awscloud_sso_cred_helper/actions?query=branch%3Amain)
 
 A crate for managing AWS Single Sign-On (SSO) workflows.
 
@@ -18,7 +18,7 @@ Add the following dependency to your `Cargo.toml`:
 
 ```
 [dependencies]
-aws_sso = "1.0.0"
+awscloud_sso_cred_helper = "1.0.0"
 
 ```
 
@@ -29,7 +29,7 @@ aws_sso = "1.0.0"
 If you do not supply a start URL or region, the library will prompt you interactively.
 
 ```
-use aws_sso::AwsSsoWorkflow;
+use awscloud_sso_cred_helper::AwsSsoWorkflow;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 If you do not supply a start URL or region, the library will prompt you interactively.
 
 ```
-use aws_sso::AwsSsoWorkflow;
+use awscloud_sso_cred_helper::AwsSsoWorkflow;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

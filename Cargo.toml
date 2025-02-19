@@ -1,13 +1,13 @@
 [package]
-name = "aws_sso"
+name = "awscloud_sso_cred_helper"
 version = "1.0.0"
 edition = "2021"
 authors = ["David Webster <dwebster182@gmail.com>"]
-description = "A simple crate for working with AWS SSO operations."
+description = "A simple crate for getting credentials from AWS SSO."
 license = "Apache-2.0"
-repository = "https://github.com/davidwebstar34/aws_sso"
-homepage = "https://github.com/davidwebstar34/aws_sso"
-documentation = "https://docs.rs/aws_sso"
+repository = "https://github.com/davidwebstar34/awscloud_sso_cred_helper"
+homepage = "https://github.com/davidwebstar34/awscloud_sso_cred_helper"
+documentation = "https://docs.rs/awscloud_sso_cred_helper"
 keywords = ["aws", "sso", "rust"]
 categories = ["cloud-computing", "access-management"]
 
@@ -22,5 +22,5 @@ dirs-next = "2.0"
 configparser = "3.1.0"
 
 [lib]
-name = "aws_sso"
+name = "awscloud_sso_cred_helper"
 path = "src/lib.rs"
