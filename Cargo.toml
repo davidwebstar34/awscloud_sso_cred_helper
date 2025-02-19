@@ -9,7 +9,6 @@ repository = "https://github.com/davidwebstar34/awscloud_sso_cred_helper"
 homepage = "https://github.com/davidwebstar34/awscloud_sso_cred_helper"
 documentation = "https://docs.rs/awscloud_sso_cred_helper"
 keywords = ["aws", "sso", "rust"]
-categories = ["cloud-computing", "access-management"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
