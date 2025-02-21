@@ -16,7 +16,7 @@ aws-config = "1.5.10"
 aws-sdk-sso = "1.5.10"
 aws-sdk-ssooidc = "1.5.10"
 webbrowser = "0.5.5"
-skim = { version = "0.9.6", default-features = false }
+skim = { version = "0.10.1", default-features = false }
 dirs-next = "2.0"
 configparser = "3.1.0"
 
