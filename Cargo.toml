@@ -1,6 +1,6 @@
 [package]
 name = "awscloud_sso_cred_helper"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 authors = ["David Webster <dwebster182@gmail.com>"]
 description = "A helper library for AWS SSO credential workflows"
@@ -16,9 +16,10 @@ aws-config = "1.5.10"
 aws-sdk-sso = "1.5.10"
 aws-sdk-ssooidc = "1.5.10"
 webbrowser = "0.8.3"
-skim = { version = "0.10.1", default-features = false }
+skim = { version = "0.15.7", default-features = false, features = ["cli"] }
 dirs-next = "2.0"
 configparser = "3.1.0"
+clap =  { version = "3.2", features = ["derive"] }
 
 [lib]
 name = "awscloud_sso_cred_helper"

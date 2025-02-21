@@ -262,8 +262,8 @@ impl AwsSsoWorkflow {
         ];
 
         let options = SkimOptionsBuilder::default()
-            .height(Some("10"))
-            .prompt(Some("Select region: "))
+            .height("10".to_string())
+            .prompt("Select region: ".to_string())
             .multi(false)
             .build()
             .unwrap();
@@ -346,9 +346,9 @@ impl AwsSsoWorkflow {
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         Skim::run_with(
             &SkimOptionsBuilder::default()
-                .height(Some("20"))
+                .height("20".to_string())
                 .multi(true)
-                .prompt(Some("Select accounts and roles: "))
+                .prompt("Select accounts and roles: ".to_string())
                 .build()
                 .unwrap(),
             Some(
