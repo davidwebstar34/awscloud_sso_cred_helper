@@ -1,4 +1,4 @@
-# awscloud_sso_cred_helper
+# awscloud_sso_cred_helper (Unofficial)
 
 [![Crates.io](https://img.shields.io/crates/v/awscloud_sso_cred_helper.svg)](https://crates.io/crates/awscloud_sso_cred_helper)
 [![Docs.rs](https://docs.rs/awscloud_sso_cred_helper/badge.svg)](https://docs.rs/awscloud_sso_cred_helper)
