@@ -376,35 +376,62 @@ impl AwsSsoWorkflow {
         sso_client: &SsoClient,
         access_token: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let accounts_resp = sso_client
-            .list_accounts()
-            .access_token(access_token)
-            .send()
-            .await?;
-
-        let accounts = accounts_resp.account_list();
-        if accounts.is_empty() {
-            return Ok(Vec::new());
-        }
-
         let mut account_role_strings = Vec::new();
-        for account in accounts {
-            if let Some(account_id) = account.account_id() {
-                let account_name = account.account_name().unwrap_or("Unknown");
-                let roles_resp = sso_client
-                    .list_account_roles()
-                    .account_id(account_id)
-                    .access_token(access_token)
-                    .send()
-                    .await?;
-                for role in roles_resp.role_list() {
-                    if let Some(role_name) = role.role_name() {
-                        account_role_strings
-                            .push(format!("{} - {} - {}", account_id, account_name, role_name));
+        let mut next_token = None;
+
+        loop {
+            let mut request = sso_client.list_accounts().access_token(access_token);
+
+            if let Some(token) = &next_token {
+                request = request.next_token(token);
+            }
+
+            let accounts_resp = request.send().await?;
+            let accounts = accounts_resp.account_list();
+
+            if accounts.is_empty() {
+                break;
+            }
+
+            for account in accounts {
+                if let Some(account_id) = account.account_id() {
+                    let account_name = account.account_name().unwrap_or("Unknown");
+
+                    let mut next_role_token = None;
+                    loop {
+                        let mut roles_request = sso_client
+                            .list_account_roles()
+                            .account_id(account_id)
+                            .access_token(access_token);
+
+                        if let Some(token) = &next_role_token {
+                            roles_request = roles_request.next_token(token);
+                        }
+
+                        let roles_resp = roles_request.send().await?;
+                        for role in roles_resp.role_list() {
+                            if let Some(role_name) = role.role_name() {
+                                account_role_strings.push(format!(
+                                    "{} - {} - {}",
+                                    account_id, account_name, role_name
+                                ));
+                            }
+                        }
+
+                        next_role_token = roles_resp.next_token().map(|s| s.to_string());
+                        if next_role_token.is_none() {
+                            break;
+                        }
                     }
                 }
             }
+
+            next_token = accounts_resp.next_token().map(|s| s.to_string());
+            if next_token.is_none() {
+                break;
+            }
         }
+
         Ok(account_role_strings)
     }
 
