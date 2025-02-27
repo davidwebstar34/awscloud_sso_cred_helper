@@ -226,7 +226,7 @@ impl AwsSsoWorkflow {
                     if msg.contains("authorization_pending") || msg.contains("service error") {
                         sleep(Duration::from_secs(interval)).await;
                     } else if msg.contains("slow_down") {
-                        sleep(Duration::from_secs(interval + 5)).await;
+                        sleep(Duration::from_secs(interval)).await;
                     } else {
                         eprintln!("Error: CreateToken failed with message: {}", msg);
                         return Err(format!("CreateToken failed: {}", msg).into());
@@ -378,9 +378,13 @@ impl AwsSsoWorkflow {
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let mut account_role_strings = Vec::new();
         let mut next_token = None;
+        let max_results = 1000;
 
         loop {
-            let mut request = sso_client.list_accounts().access_token(access_token);
+            let mut request = sso_client
+                .list_accounts()
+                .access_token(access_token)
+                .max_results(max_results);
 
             if let Some(token) = &next_token {
                 request = request.next_token(token);
