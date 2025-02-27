@@ -223,9 +223,10 @@ impl AwsSsoWorkflow {
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    if msg.contains("authorization_pending") || msg.contains("service error") {
-                        sleep(Duration::from_secs(interval)).await;
-                    } else if msg.contains("slow_down") {
+                    if msg.contains("authorization_pending")
+                        || msg.contains("service error")
+                        || msg.contains("slow_down")
+                    {
                         sleep(Duration::from_secs(interval)).await;
                     } else {
                         eprintln!("Error: CreateToken failed with message: {}", msg);
