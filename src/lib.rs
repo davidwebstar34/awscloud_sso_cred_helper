@@ -75,7 +75,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
-use tokio::time::{sleep, Duration};
+use tokio::task;
 
 #[derive(Default, Clone)]
 pub struct AwsSsoWorkflow {
@@ -206,33 +206,19 @@ impl AwsSsoWorkflow {
         client_id: &str,
         client_secret: &str,
         device_code: &str,
-        interval: u64,
     ) -> Result<CreateTokenOutput, Box<dyn Error>> {
         loop {
-            match sso_oidc_client
+            let response = sso_oidc_client
                 .create_token()
                 .client_id(client_id.to_string())
                 .client_secret(client_secret.to_string())
                 .grant_type("urn:ietf:params:oauth:grant-type:device_code")
                 .device_code(device_code)
                 .send()
-                .await
-            {
-                Ok(tr) => {
-                    return Ok(tr);
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("authorization_pending")
-                        || msg.contains("service error")
-                        || msg.contains("slow_down")
-                    {
-                        sleep(Duration::from_secs(interval)).await;
-                    } else {
-                        eprintln!("Error: CreateToken failed with message: {}", msg);
-                        return Err(format!("CreateToken failed: {}", msg).into());
-                    }
-                }
+                .await;
+
+            if let Ok(token) = response {
+                return Ok(token);
             }
         }
     }
@@ -379,7 +365,10 @@ impl AwsSsoWorkflow {
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let mut account_role_strings = Vec::new();
         let mut next_token = None;
-        let max_results = 1000;
+        let max_results = 100;
+
+        let mut account_ids = Vec::new();
+        let mut account_names = Vec::new();
 
         loop {
             let mut request = sso_client
@@ -401,50 +390,76 @@ impl AwsSsoWorkflow {
             for account in accounts {
                 if let Some(account_id) = account.account_id() {
                     let account_name = account.account_name().unwrap_or("Unknown");
-
-                    let mut next_role_token = None;
-                    loop {
-                        let mut roles_request = sso_client
-                            .list_account_roles()
-                            .account_id(account_id)
-                            .access_token(access_token);
-
-                        if let Some(token) = &next_role_token {
-                            roles_request = roles_request.next_token(token);
-                        }
-
-                        let roles_resp = roles_request.send().await?;
-                        for role in roles_resp.role_list() {
-                            if let Some(role_name) = role.role_name() {
-                                account_role_strings.push(format!(
-                                    "{} - {} - {}",
-                                    account_id, account_name, role_name
-                                ));
-                            }
-                        }
-
-                        next_role_token = roles_resp.next_token().map(|s| s.to_string());
-                        if next_role_token.is_none() {
-                            break;
-                        }
-                    }
+                    account_ids.push(account_id.to_string());
+                    account_names.push(account_name.to_string());
                 }
             }
 
             next_token = accounts_resp.next_token().map(|s| s.to_string());
+
             if next_token.is_none() {
                 break;
+            }
+        }
+
+        let mut tasks = vec![];
+
+        for (account_id, account_name) in account_ids.into_iter().zip(account_names.into_iter()) {
+            let sso_client = sso_client.clone();
+            let access_token = access_token.to_string();
+
+            let task = task::spawn(async move {
+                let mut roles = Vec::new();
+                let mut next_role_token = None;
+
+                loop {
+                    let mut roles_request = sso_client
+                        .list_account_roles()
+                        .account_id(&account_id)
+                        .access_token(&access_token);
+
+                    if let Some(token) = &next_role_token {
+                        roles_request = roles_request.next_token(token);
+                    }
+
+                    match roles_request.send().await {
+                        Ok(roles_resp) => {
+                            for role in roles_resp.role_list() {
+                                if let Some(role_name) = role.role_name() {
+                                    roles.push(format!(
+                                        "{} - {} - {}",
+                                        account_id, account_name, role_name
+                                    ));
+                                }
+                            }
+                            next_role_token = roles_resp.next_token().map(|s| s.to_string());
+                            if next_role_token.is_none() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to fetch roles for {}: {}", account_id, e);
+                            break;
+                        }
+                    }
+                }
+                roles
+            });
+
+            tasks.push(task);
+        }
+
+        for task in tasks {
+            match task.await {
+                Ok(roles) => account_role_strings.extend(roles),
+                Err(e) => eprintln!("A role fetch task failed: {:?}", e),
             }
         }
 
         Ok(account_role_strings)
     }
 
-    /// The main workflow.
-    ///
-    /// If `start_url` or `region` are empty, the user is prompted (or a fuzzy selector is shown).
     pub async fn run_workflow(&mut self) -> Result<Credential, Box<dyn Error>> {
-        // Use provided values if available; otherwise, prompt.
         if self.start_url.trim().is_empty() {
             self.start_url = Self::prompt_input("Enter the AWS start URL")?;
         }
@@ -464,7 +479,7 @@ impl AwsSsoWorkflow {
         let sso_oidc_client = SsoOidcClient::new(&config);
         let (client_id, client_secret) =
             Self::register_client(&sso_oidc_client, "my-rust-sso-client", "public").await?;
-        let (device_code, user_code, verification_uri, verification_uri_complete, interval) =
+        let (device_code, user_code, verification_uri, verification_uri_complete, _interval) =
             Self::start_device_authorization(
                 &sso_oidc_client,
                 &client_id,
@@ -484,14 +499,9 @@ impl AwsSsoWorkflow {
             println!("Enter the user code: {}", user_code);
         }
 
-        let token_response = Self::poll_for_token(
-            &sso_oidc_client,
-            &client_id,
-            &client_secret,
-            &device_code,
-            interval as u64,
-        )
-        .await?;
+        let token_response =
+            Self::poll_for_token(&sso_oidc_client, &client_id, &client_secret, &device_code)
+                .await?;
         let sso_client = SsoClient::new(&config);
         let access_token = Self::extract_access_token(&token_response)?;
 
