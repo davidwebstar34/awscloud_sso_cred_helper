@@ -76,8 +76,8 @@ use std::fs;
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::task;
 use tokio::sync::Semaphore;
+use tokio::task;
 
 #[derive(Default, Clone)]
 pub struct AwsSsoWorkflow {
@@ -405,55 +405,55 @@ impl AwsSsoWorkflow {
         }
 
         let semaphore = Arc::new(Semaphore::new(5)); // Limit to 5 concurrent requests
-let mut tasks = vec![];
+        let mut tasks = vec![];
 
-for (account_id, account_name) in account_ids.into_iter().zip(account_names.into_iter()) {
-    let sso_client = sso_client.clone();
-    let access_token = access_token.to_string();
-    let semaphore = semaphore.clone(); // Clone the semaphore for each task
+        for (account_id, account_name) in account_ids.into_iter().zip(account_names.into_iter()) {
+            let sso_client = sso_client.clone();
+            let access_token = access_token.to_string();
+            let semaphore = semaphore.clone(); // Clone the semaphore for each task
 
-    let task = task::spawn(async move {
-        let _permit = semaphore.acquire().await.unwrap(); // Acquire a permit before proceeding
+            let task = task::spawn(async move {
+                let _permit = semaphore.acquire().await.unwrap(); // Acquire a permit before proceeding
 
-        let mut roles = Vec::new();
-        let mut next_role_token = None;
+                let mut roles = Vec::new();
+                let mut next_role_token = None;
 
-        loop {
-            let mut roles_request = sso_client
-                .list_account_roles()
-                .account_id(&account_id)
-                .access_token(&access_token);
+                loop {
+                    let mut roles_request = sso_client
+                        .list_account_roles()
+                        .account_id(&account_id)
+                        .access_token(&access_token);
 
-            if let Some(token) = &next_role_token {
-                roles_request = roles_request.next_token(token);
-            }
+                    if let Some(token) = &next_role_token {
+                        roles_request = roles_request.next_token(token);
+                    }
 
-            match roles_request.send().await {
-                Ok(roles_resp) => {
-                    for role in roles_resp.role_list() {
-                        if let Some(role_name) = role.role_name() {
-                            roles.push(format!(
-                                "{} - {} - {}",
-                                account_id, account_name, role_name
-                            ));
+                    match roles_request.send().await {
+                        Ok(roles_resp) => {
+                            for role in roles_resp.role_list() {
+                                if let Some(role_name) = role.role_name() {
+                                    roles.push(format!(
+                                        "{} - {} - {}",
+                                        account_id, account_name, role_name
+                                    ));
+                                }
+                            }
+                            next_role_token = roles_resp.next_token().map(|s| s.to_string());
+                            if next_role_token.is_none() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to fetch roles for {}: {}", account_id, e);
+                            break;
                         }
                     }
-                    next_role_token = roles_resp.next_token().map(|s| s.to_string());
-                    if next_role_token.is_none() {
-                        break;
-                    }
                 }
-                Err(e) => {
-                    eprintln!("Failed to fetch roles for {}: {}", account_id, e);
-                    break;
-                }
-            }
-        }
-        roles
-    });
+                roles
+            });
 
-    tasks.push(task);
-}
+            tasks.push(task);
+        }
 
         for task in tasks {
             match task.await {
