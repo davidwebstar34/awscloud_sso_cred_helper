@@ -529,7 +529,7 @@ impl AwsSsoWorkflow {
         let sso_client = SsoClient::new(&config);
         let access_token = Self::extract_access_token(&token_response)?;
 
-        let accounts = Self::fetch_accounts(&sso_client, &access_token).await;
+        let accounts = Self::fetch_accounts(&sso_client.clone(), &access_token.clone()).await;
         if accounts.is_empty() {
             return Err("No accounts found".into());
         }
