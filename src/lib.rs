@@ -78,6 +78,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task;
+use tokio::time::{sleep, Duration};
 
 #[derive(Default, Clone)]
 pub struct AwsSsoWorkflow {
@@ -367,12 +368,16 @@ impl AwsSsoWorkflow {
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let mut account_role_strings = Vec::new();
         let mut next_token = None;
+        let max_results = 120;
 
         let mut account_ids = Vec::new();
         let mut account_names = Vec::new();
 
         loop {
-            let mut request = sso_client.list_accounts().access_token(access_token);
+            let mut request = sso_client
+                .list_accounts()
+                .access_token(access_token)
+                .max_results(max_results);
 
             if let Some(token) = &next_token {
                 request = request.next_token(token);
@@ -400,7 +405,9 @@ impl AwsSsoWorkflow {
             }
         }
 
-        let semaphore = Arc::new(Semaphore::new(1));
+        let initial_concurrency = 2;
+        let max_concurrency = 5;
+        let semaphore = Arc::new(Semaphore::new(initial_concurrency));
         let mut tasks = vec![];
 
         for (account_id, account_name) in account_ids.into_iter().zip(account_names.into_iter()) {
@@ -413,6 +420,7 @@ impl AwsSsoWorkflow {
 
                 let mut roles = Vec::new();
                 let mut next_role_token = None;
+                let mut backoff = 1;
 
                 loop {
                     let mut roles_request = sso_client
@@ -438,10 +446,27 @@ impl AwsSsoWorkflow {
                             if next_role_token.is_none() {
                                 break;
                             }
+                            backoff = 1; // Reset backoff on success
                         }
                         Err(e) => {
-                            eprintln!("Failed to fetch roles for {}: {}", account_id, e);
-                            break;
+                            let msg = e.to_string();
+                            if msg.contains("rate limit")
+                                || msg.contains("TooManyRequestsException")
+                            {
+                                println!("Rate limit hit. Backing off for {} seconds...", backoff);
+                                sleep(Duration::from_secs(backoff)).await;
+                                backoff *= 2; // Exponential backoff
+                                if backoff > 10 {
+                                    eprintln!(
+                                        "Skipping account {} due to excessive throttling",
+                                        account_id
+                                    );
+                                    break;
+                                }
+                            } else {
+                                eprintln!("Failed to fetch roles for {}: {}", account_id, e);
+                                break;
+                            }
                         }
                     }
                 }
@@ -451,12 +476,15 @@ impl AwsSsoWorkflow {
             tasks.push(task);
         }
 
+        // Step 3: Collect results
         for task in tasks {
             match task.await {
                 Ok(roles) => account_role_strings.extend(roles),
                 Err(e) => eprintln!("A role fetch task failed: {:?}", e),
             }
         }
+
+        println!("Total roles fetched: {}", account_role_strings.len());
 
         Ok(account_role_strings)
     }
