@@ -416,8 +416,14 @@ impl AwsSsoWorkflow {
                 let mut roles = Vec::new();
                 let mut next_role_token = None;
                 let mut retries = 0;
+                let max_retries = 5;
+                let mut dots = 1;
 
                 loop {
+                    print!("\rProcessing{} ", ".".repeat(dots));
+                    std::io::stdout().flush().unwrap();
+                    dots = (dots % 3) + 1;
+
                     let mut request = sso_client
                         .list_account_roles()
                         .account_id(&account_id)
@@ -445,22 +451,30 @@ impl AwsSsoWorkflow {
                         }
                         Err(e) => {
                             let msg = e.to_string();
+                            eprintln!("\n❌ Error fetching roles for {}: {}", account_id, msg);
+
                             if msg.contains("rate limit")
                                 || msg.contains("TooManyRequestsException")
+                                || msg.contains("Service Error")
+                                || msg.contains("service error")
                             {
-                                if retries >= 3 {
-                                    eprintln!("Skipping {} after 3 retries", account_id);
+                                if retries >= max_retries {
+                                    eprintln!(
+                                    "🚨 Skipping {} after {} retries due to repeated AWS failures",
+                                    account_id, max_retries
+                                );
                                     break;
                                 }
+
                                 let wait_time = 2_u64.pow(retries);
                                 println!(
-                                    "Rate limited, retrying {} in {}s...",
-                                    account_id, wait_time
-                                );
+                                "\n⚠️ AWS service error on {}. Retrying in {}s... (attempt {}/{})",
+                                account_id, wait_time, retries + 1, max_retries
+                            );
                                 sleep(Duration::from_secs(wait_time)).await;
                                 retries += 1;
                             } else {
-                                eprintln!("Failed to fetch roles for {}: {}", account_id, e);
+                                eprintln!("\n❌ Non-retryable error for {}: {}", account_id, msg);
                                 break;
                             }
                         }
@@ -476,7 +490,7 @@ impl AwsSsoWorkflow {
         for task in tasks {
             match task.await {
                 Ok(roles) => all_roles.extend(roles),
-                Err(e) => eprintln!("A role fetch task failed: {:?}", e),
+                Err(e) => eprintln!("\n🚨 A role fetch task failed: {:?}", e),
             }
         }
 
