@@ -367,16 +367,12 @@ impl AwsSsoWorkflow {
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let mut account_role_strings = Vec::new();
         let mut next_token = None;
-        let max_results = 100;
 
         let mut account_ids = Vec::new();
         let mut account_names = Vec::new();
 
         loop {
-            let mut request = sso_client
-                .list_accounts()
-                .access_token(access_token)
-                .max_results(max_results);
+            let mut request = sso_client.list_accounts().access_token(access_token);
 
             if let Some(token) = &next_token {
                 request = request.next_token(token);
@@ -404,16 +400,16 @@ impl AwsSsoWorkflow {
             }
         }
 
-        let semaphore = Arc::new(Semaphore::new(5)); // Limit to 5 concurrent requests
+        let semaphore = Arc::new(Semaphore::new(1));
         let mut tasks = vec![];
 
         for (account_id, account_name) in account_ids.into_iter().zip(account_names.into_iter()) {
             let sso_client = sso_client.clone();
             let access_token = access_token.to_string();
-            let semaphore = semaphore.clone(); // Clone the semaphore for each task
+            let semaphore = semaphore.clone();
 
             let task = task::spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap(); // Acquire a permit before proceeding
+                let _permit = semaphore.acquire().await.unwrap();
 
                 let mut roles = Vec::new();
                 let mut next_role_token = None;
