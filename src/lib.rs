@@ -62,7 +62,7 @@
 //!
 //! ## License
 //!
-//! Apache License, Version 2.0 or http://www.apache.org/licenses/LICENSE-2.0
+//! MIT License or https://opensource.org/licenses/MIT
 
 use aws_config::BehaviorVersion;
 use aws_sdk_sso::config::Region;
@@ -126,7 +126,6 @@ impl AwsSsoWorkflow {
         config.remove_section("default");
         config.remove_section("defaultx");
 
-        // Use a temporary section name ("defaultx") so that we can later replace it.
         config.set(
             "defaultx",
             "aws_access_key_id",
@@ -265,7 +264,7 @@ impl AwsSsoWorkflow {
             .map(|out| out.selected_items)
             .unwrap_or_default();
         if let Some(selected) = selected_items.first() {
-            println!(); // Ensure output appears on a new line
+            println!();
             Ok(selected.output().to_string())
         } else {
             Err("No region selected".into())
@@ -362,78 +361,75 @@ impl AwsSsoWorkflow {
             .ok_or_else(|| "Missing access_token".into())
     }
 
-    async fn fetch_accounts_and_roles(
-        sso_client: &SsoClient,
-        access_token: &str,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let mut account_role_strings = Vec::new();
+    async fn fetch_accounts(sso_client: &SsoClient, access_token: &str) -> Vec<(String, String)> {
+        let mut accounts = Vec::new();
         let mut next_token = None;
-        let max_results = 120;
-
-        let mut account_ids = Vec::new();
-        let mut account_names = Vec::new();
+        let max_results = 100;
 
         loop {
             let mut request = sso_client
                 .list_accounts()
                 .access_token(access_token)
                 .max_results(max_results);
-
             if let Some(token) = &next_token {
                 request = request.next_token(token);
             }
 
-            let accounts_resp = request.send().await?;
-            let accounts = accounts_resp.account_list();
-
-            if accounts.is_empty() {
-                break;
-            }
-
-            for account in accounts {
-                if let Some(account_id) = account.account_id() {
-                    let account_name = account.account_name().unwrap_or("Unknown");
-                    account_ids.push(account_id.to_string());
-                    account_names.push(account_name.to_string());
+            match request.send().await {
+                Ok(response) => {
+                    for account in response.account_list() {
+                        if let Some(account_id) = account.account_id() {
+                            let account_name =
+                                account.account_name().unwrap_or("Unknown").to_string();
+                            accounts.push((account_id.to_string(), account_name));
+                        }
+                    }
+                    next_token = response.next_token().map(|s| s.to_string());
+                    if next_token.is_none() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error fetching accounts: {}", e);
+                    break;
                 }
             }
-
-            next_token = accounts_resp.next_token().map(|s| s.to_string());
-
-            if next_token.is_none() {
-                break;
-            }
         }
+        accounts
+    }
 
-        let initial_concurrency = 2;
-        let semaphore = Arc::new(Semaphore::new(initial_concurrency));
+    async fn fetch_roles(
+        sso_client: Arc<SsoClient>,
+        access_token: Arc<String>,
+        accounts: Vec<(String, String)>,
+    ) -> Vec<String> {
+        let semaphore = Arc::new(Semaphore::new(4));
         let mut tasks = vec![];
 
-        for (account_id, account_name) in account_ids.into_iter().zip(account_names.into_iter()) {
+        for (account_id, account_name) in accounts {
             let sso_client = sso_client.clone();
-            let access_token = access_token.to_string();
+            let access_token = access_token.clone();
             let semaphore = semaphore.clone();
 
             let task = task::spawn(async move {
                 let _permit = semaphore.acquire().await.unwrap();
-
                 let mut roles = Vec::new();
                 let mut next_role_token = None;
-                let mut backoff = 1;
+                let mut retries = 0;
 
                 loop {
-                    let mut roles_request = sso_client
+                    let mut request = sso_client
                         .list_account_roles()
                         .account_id(&account_id)
-                        .access_token(&access_token);
+                        .access_token(&*access_token);
 
                     if let Some(token) = &next_role_token {
-                        roles_request = roles_request.next_token(token);
+                        request = request.next_token(token);
                     }
 
-                    match roles_request.send().await {
-                        Ok(roles_resp) => {
-                            for role in roles_resp.role_list() {
+                    match request.send().await {
+                        Ok(response) => {
+                            for role in response.role_list() {
                                 if let Some(role_name) = role.role_name() {
                                     roles.push(format!(
                                         "{} - {} - {}",
@@ -441,27 +437,28 @@ impl AwsSsoWorkflow {
                                     ));
                                 }
                             }
-                            next_role_token = roles_resp.next_token().map(|s| s.to_string());
+                            next_role_token = response.next_token().map(|s| s.to_string());
                             if next_role_token.is_none() {
                                 break;
                             }
-                            backoff = 1; // Reset backoff on success
+                            retries = 0;
                         }
                         Err(e) => {
                             let msg = e.to_string();
                             if msg.contains("rate limit")
                                 || msg.contains("TooManyRequestsException")
                             {
-                                println!("Rate limit hit. Backing off for {} seconds...", backoff);
-                                sleep(Duration::from_secs(backoff)).await;
-                                backoff *= 2; // Exponential backoff
-                                if backoff > 10 {
-                                    eprintln!(
-                                        "Skipping account {} due to excessive throttling",
-                                        account_id
-                                    );
+                                if retries >= 3 {
+                                    eprintln!("Skipping {} after 3 retries", account_id);
                                     break;
                                 }
+                                let wait_time = 2_u64.pow(retries);
+                                println!(
+                                    "Rate limited, retrying {} in {}s...",
+                                    account_id, wait_time
+                                );
+                                sleep(Duration::from_secs(wait_time)).await;
+                                retries += 1;
                             } else {
                                 eprintln!("Failed to fetch roles for {}: {}", account_id, e);
                                 break;
@@ -475,17 +472,15 @@ impl AwsSsoWorkflow {
             tasks.push(task);
         }
 
-        // Step 3: Collect results
+        let mut all_roles = Vec::new();
         for task in tasks {
             match task.await {
-                Ok(roles) => account_role_strings.extend(roles),
+                Ok(roles) => all_roles.extend(roles),
                 Err(e) => eprintln!("A role fetch task failed: {:?}", e),
             }
         }
 
-        println!("Total roles fetched: {}", account_role_strings.len());
-
-        Ok(account_role_strings)
+        all_roles
     }
 
     pub async fn run_workflow(&mut self) -> Result<Credential, Box<dyn Error>> {
@@ -534,20 +529,33 @@ impl AwsSsoWorkflow {
         let sso_client = SsoClient::new(&config);
         let access_token = Self::extract_access_token(&token_response)?;
 
-        let account_role_strings =
-            Self::fetch_accounts_and_roles(&sso_client, access_token).await?;
-        if account_role_strings.is_empty() {
-            return Err("No accounts or roles found".into());
+        let accounts = Self::fetch_accounts(&sso_client, &access_token).await;
+        if accounts.is_empty() {
+            return Err("No accounts found".into());
         }
 
+        let sso_client = Arc::new(sso_client);
+        let access_token = Arc::new(access_token.to_string());
+
+        let account_role_strings =
+            Self::fetch_roles(sso_client.clone(), access_token.clone(), accounts).await;
+        if account_role_strings.is_empty() {
+            return Err("No roles found".into());
+        }
+
+        println!("Total roles fetched: {}", account_role_strings.len());
         let selected_items = Self::perform_fuzzy_search(&account_role_strings)?;
         if selected_items.is_empty() {
             return Err("No accounts selected".into());
         }
 
-        let credentials =
-            Self::process_selected_accounts_and_roles(&sso_client, access_token, selected_items)
-                .await?;
+        let credentials = Self::process_selected_accounts_and_roles(
+            &sso_client.clone(),
+            &access_token.clone(),
+            selected_items,
+        )
+        .await?;
+
         Ok(credentials)
     }
 
