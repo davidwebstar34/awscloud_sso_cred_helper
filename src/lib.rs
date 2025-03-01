@@ -406,7 +406,6 @@ impl AwsSsoWorkflow {
         }
 
         let initial_concurrency = 2;
-        let max_concurrency = 5;
         let semaphore = Arc::new(Semaphore::new(initial_concurrency));
         let mut tasks = vec![];
 
