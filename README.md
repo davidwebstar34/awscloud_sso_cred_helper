@@ -18,7 +18,7 @@ Add the following dependency to your `Cargo.toml`:
 
 ```
 [dependencies]
-awscloud_sso_cred_helper = "1.10.0"
+awscloud_sso_cred_helper = "1.11.0"
 
 ```
 
