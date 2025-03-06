@@ -70,15 +70,11 @@ use aws_sdk_sso::Client as SsoClient;
 use aws_sdk_ssooidc::operation::create_token::CreateTokenOutput;
 use aws_sdk_ssooidc::Client as SsoOidcClient;
 use configparser::ini::Ini;
-use skim::prelude::*;
+use inquire::Select;
 use std::error::Error;
 use std::fs;
-use std::io::{Cursor, Write};
+use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Semaphore;
-use tokio::task;
-use tokio::time::{sleep, Duration};
 
 #[derive(Default, Clone)]
 pub struct AwsSsoWorkflow {
@@ -250,107 +246,18 @@ impl AwsSsoWorkflow {
             "sa-east-1",
         ];
 
-        let options = SkimOptionsBuilder::default()
-            .height("10".to_string())
-            .prompt("Select region: ".to_string())
-            .multi(false)
-            .build()
-            .unwrap();
-
-        let item_reader = SkimItemReader::default();
-        let items = item_reader.of_bufread(Cursor::new(regions.join("\n")));
-
-        let selected_items = Skim::run_with(&options, Some(items))
-            .map(|out| out.selected_items)
-            .unwrap_or_default();
-        if let Some(selected) = selected_items.first() {
-            println!();
-            Ok(selected.output().to_string())
-        } else {
-            Err("No region selected".into())
-        }
+        let region = Select::new("Select AWS region:", regions).prompt()?;
+        Ok(region.to_string())
     }
 
-    async fn process_selected_accounts_and_roles(
-        sso_client: &SsoClient,
-        access_token: &str,
-        selected_items: Vec<String>,
-    ) -> Result<Credential, Box<dyn std::error::Error>> {
-        for selected_output in selected_items {
-            let parts: Vec<&str> = selected_output.split(" - ").collect();
-            if parts.len() != 3 {
-                eprintln!("Invalid selection format: {}", selected_output);
-                continue;
-            }
-
-            let account_id = parts[0];
-            let role_name = parts[2];
-
-            let credentials_resp = sso_client
-                .get_role_credentials()
-                .account_id(account_id)
-                .role_name(role_name)
-                .access_token(access_token)
-                .send()
-                .await?;
-
-            if let Some(credentials) = credentials_resp.role_credentials() {
-                let access_key_id = credentials.access_key_id().unwrap_or("").to_string();
-                let secret_access_key = credentials.secret_access_key().unwrap_or("").to_string();
-                let session_token = credentials.session_token().unwrap_or("").to_string();
-
-                let creds = Credential {
-                    account_id: account_id.to_string(),
-                    role_name: role_name.to_string(),
-                    access_key_id: access_key_id.clone(),
-                    secret_access_key: secret_access_key.clone(),
-                    session_token: session_token.clone(),
-                };
-
-                println!();
-                println!(
-                    "Credentials fetched for Account ID: {}, Role: {}",
-                    account_id, role_name
-                );
-
-                AwsSsoWorkflow::write_default_aws_credentials(
-                    &access_key_id,
-                    &secret_access_key,
-                    &session_token,
-                )?;
-
-                return Ok(creds);
-            } else {
-                eprintln!(
-                    "Failed to fetch credentials for Account ID: {}, Role: {}",
-                    account_id, role_name
-                );
-            }
-        }
-        Err("No valid credentials found".into())
-    }
-
-    fn perform_fuzzy_search(
-        account_role_strings: &[String],
-    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        Skim::run_with(
-            &SkimOptionsBuilder::default()
-                .height("20".to_string())
-                .multi(true)
-                .prompt("Select accounts and roles: ".to_string())
-                .build()
-                .unwrap(),
-            Some(
-                SkimItemReader::default().of_bufread(Cursor::new(account_role_strings.join("\n"))),
-            ),
-        )
-        .map(|out| {
-            out.selected_items
-                .iter()
-                .map(|item| item.output().to_string())
-                .collect()
-        })
-        .ok_or_else(|| "No selection made.".into())
+    fn perform_fuzzy_search_single(
+        items: &[String],
+        prompt: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        Select::new(prompt, items.to_vec())
+            .with_page_size(15)
+            .prompt()
+            .map_err(|e| e.into())
     }
 
     fn extract_access_token(
@@ -398,108 +305,45 @@ impl AwsSsoWorkflow {
         accounts
     }
 
-    async fn fetch_roles(
-        sso_client: Arc<SsoClient>,
-        access_token: Arc<String>,
-        accounts: Vec<(String, String)>,
-    ) -> Vec<String> {
-        let semaphore = Arc::new(Semaphore::new(4));
-        let mut tasks = vec![];
+    async fn fetch_roles_for_account(
+        sso_client: &SsoClient,
+        access_token: &str,
+        account_id: &str,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        let mut roles = Vec::new();
+        let mut next_token = None;
 
-        for (account_id, account_name) in accounts {
-            let sso_client = sso_client.clone();
-            let access_token = access_token.clone();
-            let semaphore = semaphore.clone();
+        loop {
+            let mut request = sso_client
+                .list_account_roles()
+                .account_id(account_id)
+                .access_token(access_token)
+                .max_results(50);
 
-            let task = task::spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap();
-                let mut roles = Vec::new();
-                let mut next_role_token = None;
-                let mut retries = 0;
-                let max_retries = 5;
-                let mut dots = 1;
+            if let Some(token) = &next_token {
+                request = request.next_token(token);
+            }
 
-                loop {
-                    print!("\rProcessing{} ", ".".repeat(dots));
-                    std::io::stdout().flush().unwrap();
-                    dots = (dots % 3) + 1;
+            let response = request.send().await?;
+            roles.extend(
+                response
+                    .role_list()
+                    .iter()
+                    .filter_map(|role| role.role_name().map(|rn| rn.to_string())),
+            );
 
-                    let mut request = sso_client
-                        .list_account_roles()
-                        .account_id(&account_id)
-                        .access_token(&*access_token);
-
-                    if let Some(token) = &next_role_token {
-                        request = request.next_token(token);
-                    }
-
-                    match request.send().await {
-                        Ok(response) => {
-                            for role in response.role_list() {
-                                if let Some(role_name) = role.role_name() {
-                                    roles.push(format!(
-                                        "{} - {} - {}",
-                                        account_id, account_name, role_name
-                                    ));
-                                }
-                            }
-                            next_role_token = response.next_token().map(|s| s.to_string());
-                            if next_role_token.is_none() {
-                                break;
-                            }
-                            retries = 0;
-                        }
-                        Err(e) => {
-                            let msg = e.to_string();
-                            eprintln!("\n❌ Error fetching roles for {}: {}", account_id, msg);
-
-                            if msg.contains("rate limit")
-                                || msg.contains("TooManyRequestsException")
-                                || msg.contains("Service Error")
-                                || msg.contains("service error")
-                            {
-                                if retries >= max_retries {
-                                    eprintln!(
-                                    "🚨 Skipping {} after {} retries due to repeated AWS failures",
-                                    account_id, max_retries
-                                );
-                                    break;
-                                }
-
-                                let wait_time = 2_u64.pow(retries);
-                                println!(
-                                "\n⚠️ AWS service error on {}. Retrying in {}s... (attempt {}/{})",
-                                account_id, wait_time, retries + 1, max_retries
-                            );
-                                sleep(Duration::from_secs(wait_time)).await;
-                                retries += 1;
-                            } else {
-                                eprintln!("\n❌ Non-retryable error for {}: {}", account_id, msg);
-                                break;
-                            }
-                        }
-                    }
-                }
-                roles
-            });
-
-            tasks.push(task);
-        }
-
-        let mut all_roles = Vec::new();
-        for task in tasks {
-            match task.await {
-                Ok(roles) => all_roles.extend(roles),
-                Err(e) => eprintln!("\n🚨 A role fetch task failed: {:?}", e),
+            next_token = response.next_token().map(|t| t.to_string());
+            if next_token.is_none() {
+                break;
             }
         }
 
-        all_roles
+        Ok(roles)
     }
 
     pub async fn run_workflow(&mut self) -> Result<Credential, Box<dyn Error>> {
         if self.start_url.trim().is_empty() {
-            self.start_url = Self::prompt_input("Enter the AWS start URL")?;
+            self.start_url = Self::prompt_input("Enter AWS start URL")?;
         }
         if self.region.trim().is_empty() {
             self.region = Self::select_region()?;
@@ -510,14 +354,16 @@ impl AwsSsoWorkflow {
             self.start_url, self.region
         );
 
-        let config: aws_config::SdkConfig = aws_config::defaults(BehaviorVersion::v2024_03_28())
+        let config = aws_config::defaults(BehaviorVersion::v2024_03_28())
             .region(Region::new(self.region.clone()))
             .load()
             .await;
+
         let sso_oidc_client = SsoOidcClient::new(&config);
         let (client_id, client_secret) =
-            Self::register_client(&sso_oidc_client, "my-rust-sso-client", "public").await?;
-        let (device_code, user_code, verification_uri, verification_uri_complete, _interval) =
+            Self::register_client(&sso_oidc_client, "rust-sso-client", "public").await?;
+
+        let (device_code, user_code, _, verification_uri_complete, _) =
             Self::start_device_authorization(
                 &sso_oidc_client,
                 &client_id,
@@ -526,51 +372,74 @@ impl AwsSsoWorkflow {
             )
             .await?;
 
-        println!("Opening the verification page in your browser...");
-        if webbrowser::open(&verification_uri_complete).is_ok() {
-            println!("Please authenticate to continue.");
-        } else {
-            println!(
-                "Could not open the browser. Please go to: {}",
-                verification_uri
-            );
-            println!("Enter the user code: {}", user_code);
-        }
+        println!("Opening browser for authentication...");
+        webbrowser::open(&verification_uri_complete).ok();
+        println!("Authenticate to continue. User code: {}", user_code);
 
         let token_response =
             Self::poll_for_token(&sso_oidc_client, &client_id, &client_secret, &device_code)
                 .await?;
-        let sso_client = SsoClient::new(&config);
+
         let access_token = Self::extract_access_token(&token_response)?;
 
-        let accounts = Self::fetch_accounts(&sso_client.clone(), access_token).await;
+        let sso_client = SsoClient::new(&config);
+
+        // Step 1: Fetch accounts and select one
+        let accounts = Self::fetch_accounts(&sso_client, access_token).await;
         if accounts.is_empty() {
             return Err("No accounts found".into());
         }
 
-        let sso_client = Arc::new(sso_client);
-        let access_token = Arc::new(access_token.to_string());
+        let account_strings: Vec<String> = accounts
+            .iter()
+            .map(|(id, name)| format!("{} - {}", id, name))
+            .collect();
 
-        let account_role_strings =
-            Self::fetch_roles(sso_client.clone(), access_token.clone(), accounts).await;
-        if account_role_strings.is_empty() {
-            return Err("No roles found".into());
+        let selected_account =
+            Self::perform_fuzzy_search_single(&account_strings, "Select AWS account")?;
+        let account_id = selected_account.split(" - ").next().unwrap();
+
+        // Step 2: Fetch roles for selected account and select one
+        let roles = Self::fetch_roles_for_account(&sso_client, access_token, account_id).await?;
+        if roles.is_empty() {
+            return Err("No roles found for this account".into());
         }
 
-        println!("Total roles fetched: {}", account_role_strings.len());
-        let selected_items = Self::perform_fuzzy_search(&account_role_strings)?;
-        if selected_items.is_empty() {
-            return Err("No accounts selected".into());
+        let selected_role = Self::perform_fuzzy_search_single(&roles, "Select role")?;
+
+        // Step 3: Fetch credentials
+        let credentials_resp = sso_client
+            .get_role_credentials()
+            .account_id(account_id)
+            .role_name(&selected_role)
+            .access_token(access_token)
+            .send()
+            .await?;
+
+        if let Some(credentials) = credentials_resp.role_credentials() {
+            let credential = Credential {
+                account_id: account_id.to_string(),
+                role_name: selected_role.clone(),
+                access_key_id: credentials.access_key_id().unwrap_or_default().into(),
+                secret_access_key: credentials.secret_access_key().unwrap_or_default().into(),
+                session_token: credentials.session_token().unwrap_or_default().into(),
+            };
+
+            AwsSsoWorkflow::write_default_aws_credentials(
+                &credential.access_key_id,
+                &credential.secret_access_key,
+                &credential.session_token,
+            )?;
+
+            println!(
+                "✅ Credentials fetched for Account: {}, Role: {}",
+                account_id, selected_role
+            );
+
+            Ok(credential)
+        } else {
+            Err("Failed to fetch credentials".into())
         }
-
-        let credentials = Self::process_selected_accounts_and_roles(
-            &sso_client.clone(),
-            &access_token.clone(),
-            selected_items,
-        )
-        .await?;
-
-        Ok(credentials)
     }
 
     fn prompt_input(prompt: &str) -> Result<String, Box<dyn Error>> {

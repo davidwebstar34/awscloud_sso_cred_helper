@@ -11,12 +11,12 @@ documentation = "https://docs.rs/awscloud_sso_cred_helper"
 keywords = ["aws", "sso", "rust"]
 
 [dependencies]
+inquire = "0.7"
 tokio = { version = "1", features = ["full"] }
 aws-config = "1.5.10"
 aws-sdk-sso = "1.5.10"
 aws-sdk-ssooidc = "1.5.10"
 webbrowser = "0.8.3"
-skim = { version = "0.15.7", default-features = false, features = ["cli"] }
 dirs-next = "2.0"
 configparser = "3.1.0"
 clap =  { version = "3.2", features = ["derive"] }
